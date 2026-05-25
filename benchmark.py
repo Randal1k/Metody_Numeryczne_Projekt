@@ -16,9 +16,21 @@ from projectile.simulation import Method, integrate_until_ground
 N_RUNS = 1000
 
 
-def _bench_one(method: Method, p: ProjectileParams, dt: float) -> float:
+def _bench_one(
+    method: Method,
+    p: ProjectileParams,
+    dt: float,
+    *,
+    rkf_atol: float = 1e-9,
+    rkf_rtol: float = 1e-6,
+) -> float:
     t0 = time.perf_counter()
-    integrate_until_ground(p, method, dt=dt)
+    if method is Method.RKF45:
+        integrate_until_ground(
+            p, method, dt=dt, rkf_atol=rkf_atol, rkf_rtol=rkf_rtol
+        )
+    else:
+        integrate_until_ground(p, method, dt=dt)
     return time.perf_counter() - t0
 
 
@@ -49,6 +61,8 @@ def run_benchmark_detailed(
     n_runs: int = N_RUNS,
     *,
     dt: float = 0.01,
+    rkf_atol: float = 1e-9,
+    rkf_rtol: float = 1e-6,
     p: ProjectileParams | None = None,
 ) -> dict[str, MethodBenchStats]:
     """
@@ -64,7 +78,9 @@ def run_benchmark_detailed(
     ):
         times: list[float] = []
         for _ in range(n_runs):
-            times.append(_bench_one(method, p, dt))
+            times.append(
+                _bench_one(method, p, dt, rkf_atol=rkf_atol, rkf_rtol=rkf_rtol)
+            )
         total = sum(times)
         out[name] = MethodBenchStats(
             n_runs=n_runs,
@@ -77,25 +93,29 @@ def run_benchmark_detailed(
     return out
 
 
-def format_benchmark_report(stats: dict[str, MethodBenchStats]) -> str:
+def format_benchmark_report(
+    stats: dict[str, MethodBenchStats],
+    *,
+    dt: float | None = None,
+    rkf_atol: float | None = None,
+    rkf_rtol: float | None = None,
+) -> str:
     """
     Czytelny opis wyników: rozróżnienie czasu jednej pełnej symulacji vs sumy N uruchomień,
     jednostki ms vs s, rozrzut pomiarów (OS, GC itd.).
     """
     lines: list[str] = []
-    lines.append(
-        "Znaczenie pomiaru:\n"
-        "  - „Symulacja” to jedno pełne całkowanie trajektorii (wiele kroków numerycznych "
-        "w środku) aż do uderzenia w ziemię.\n"
-        "  - Benchmark: N kolejnych takich symulacji; mierzony jest czas każdej z osobna.\n"
-        "  - Średni czas = średnia z N pomiarów czasu jednej pełnej symulacji (poniżej: ms i s).\n"
-        "  - Łączny czas N symulacji = suma tych N pomiarów (w sekundach), czyli ok. "
-        "N × (średnia w sekundach), a nie „N × liczba w ms” bez przeliczenia jednostki.\n"
-        "    Przykład: średnia 65 ms = 0,065 s na jedną symulację; N = 1000 daje sumę ok. 65 s, nie 65 ms.\n"
-        "  - Odchylenie std: rozrzut między N czasami całej symulacji (kolejne uruchomienia), "
-        "nie między krokami całkowania ODE.\n"
-        "    Źródła rozrzutu: planista OS, cache, GC Pythona, inne procesy (nie błąd metody).\n"
-    )
+    if dt is not None:
+        lines.append(f"dt (Euler/RK4) = {dt:g} s")
+    if rkf_atol is not None and rkf_rtol is not None:
+        from projectile.tolerances import format_tolerance
+
+        lines.append(
+            f"RKF45: atol = {format_tolerance(rkf_atol)}, "
+            f"rtol = {format_tolerance(rkf_rtol)}"
+        )
+    if lines:
+        lines.append("")
 
     grand_total = 0.0
     for name in ("Euler", "RK4", "RKF45"):
@@ -107,13 +127,10 @@ def format_benchmark_report(stats: dict[str, MethodBenchStats]) -> str:
         lines.append(f"=== {name} ===")
         lines.append(
             f"  Dla N = {n}:\n"
-            f"    Średni czas jednej pełnej symulacji:     {s.mean_s * 1000:.4f} ms   "
-            f"({s.mean_s:.6f} s)\n"
-            f"    Suma czasu N symulacji (N kolejnych uruchomień): {s.total_s:.4f} s   "
-            f"(suma {n} pomiarów; kontrola: N × średnia = {n_times_mean:.4f} s)\n"
+            f"    Średni czas jednej pełnej symulacji:     {s.mean_s * 1000:.4f} ms   \n"
+            f"    Suma czasu N symulacji : {s.total_s:.4f} s   \n"
             f"    Min / max czasu pojedynczej symulacji: {s.min_s * 1000:.4f} ms / {s.max_s * 1000:.4f} ms\n"
-            f"    Odchylenie std między {n} pomiarami (całe symulacje): {s.stdev_s * 1000:.4f} ms "
-            f"({s.stdev_s:.6f} s)"
+            f"    Odchylenie std między {n} pomiarami : {s.stdev_s * 1000:.4f} ms \n"
         )
 
     lines.append("")

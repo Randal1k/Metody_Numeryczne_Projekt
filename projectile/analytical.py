@@ -1,13 +1,18 @@
 """
-Rozwiązanie analityczne dla oporu liniowego (składowe rozkłają się).
+Rozwiązanie analityczne rzutu ukośnego z oporem liniowym F_d = -k v.
 
-Oznaczenia: α = k/m.
+Wzory (v0, kąt θ od osi poziomej; vx0 = v0 cos θ, vy0 = v0 sin θ):
 
-    v_x(t) = v_x0 * exp(-α t)
-    v_y(t) = (v_y0 + g/α) * exp(-α t) - g/α
+    x(t) = x0 + (m / k) v0 cos(θ) (1 - e^{-k t / m})
+         = x0 + (m / k) vx0 (1 - e^{-k t / m})
 
-    x(t) = x0 + (v_x0/α) * (1 - exp(-α t))
-    y(t) = y0 + ((v_y0 + g/α)/α) * (1 - exp(-α t)) - (g/α) * t
+    y(t) = y0 + (m / k) (v0 sin(θ) + m g / k) (1 - e^{-k t / m}) - (m g / k) t
+         = y0 + (m / k) (vy0 + m g / k) (1 - e^{-k t / m}) - (m g / k) t
+
+Prędkości (pochodne po czasie):
+
+    v_x(t) = v0 cos(θ) e^{-k t / m}
+    v_y(t) = (v0 sin(θ) + m g / k) e^{-k t / m} - m g / k
 """
 
 from __future__ import annotations
@@ -24,25 +29,31 @@ def analytical_state(t: float | np.ndarray, p: ProjectileParams) -> np.ndarray:
     Dla t jako tablicy kształt wyniku to (len(t), 4).
     """
     t_arr = np.atleast_1d(np.asarray(t, dtype=float))
-    alpha = p.drag_coeff
-    # Unikamy dzielenia przez zero przy braku oporu
-    if alpha == 0.0:
-        vx = np.full_like(t_arr, p.vx0, dtype=float)
-        vy = p.vy0 - p.g * t_arr
-        x = p.x0 + p.vx0 * t_arr
-        y = p.y0 + p.vy0 * t_arr - 0.5 * p.g * t_arr**2
+    m, k, g = p.m, p.k, p.g
+    vx0, vy0 = p.vx0, p.vy0
+
+    if k == 0.0:
+        vx = np.full_like(t_arr, vx0, dtype=float)
+        vy = vy0 - g * t_arr
+        x = p.x0 + vx0 * t_arr
+        y = p.y0 + vy0 * t_arr - 0.5 * g * t_arr**2
         out = np.stack([x, y, vx, vy], axis=-1)
     else:
-        ea = np.exp(-alpha * t_arr)
-        g_over_a = p.g / alpha
-        vx = p.vx0 * ea
-        vy = (p.vy0 + g_over_a) * ea - g_over_a
-        x = p.x0 + (p.vx0 / alpha) * (1.0 - ea)
+        decay = np.exp(-k * t_arr / m)
+        one_minus_decay = 1.0 - decay
+
+        # Składowa pozioma:
+        x = p.x0 + (m / k) * vx0 * one_minus_decay
+
+        # Składowa pionowa:
         y = (
             p.y0
-            + ((p.vy0 + g_over_a) / alpha) * (1.0 - ea)
-            - g_over_a * t_arr
+            + (m / k) * (vy0 + m * g / k) * one_minus_decay
+            - (m * g / k) * t_arr
         )
+        vx = vx0 * decay
+        vy = (vy0 + m * g / k) * decay - m * g / k
+
         out = np.stack([x, y, vx, vy], axis=-1)
 
     if np.isscalar(t):

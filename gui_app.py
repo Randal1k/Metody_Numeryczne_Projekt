@@ -16,25 +16,30 @@ from matplotlib.figure import Figure
 
 from benchmark import MethodBenchStats, format_benchmark_report, run_benchmark_detailed
 from projectile.model import ProjectileParams
+from projectile.tolerances import format_tolerance, parse_positive_float
 from projectile.simulation import (
     Method,
     TrajectoryResult,
     integrate_until_ground,
-    pointwise_error_vs_analytical,
+    reference_analytical_trajectory,
 )
 
-METHOD_ORDER: list[tuple[Method, str]] = [
+NUM_METHOD_ORDER: list[tuple[Method, str]] = [
     (Method.EULER, "Euler"),
     (Method.RK4, "RK4"),
     (Method.RKF45, "RKF45"),
-    (Method.ANALYTICAL, "Analityczne"),
 ]
 
-TRAJ_STYLES: dict[str, tuple[str, float]] = {
-    "Euler": ("-", 1.8),
-    "RK4": ("--", 1.8),
-    "RKF45": ("-.", 1.8),
-    "Analityczne": (":", 2.0),
+METHOD_COLORS: dict[str, str] = {
+    "Euler": "tab:blue",
+    "RK4": "tab:orange",
+    "RKF45": "tab:green",
+}
+
+METHOD_LINEWIDTH: dict[str, float] = {
+    "Euler": 1.8,
+    "RK4": 1.8,
+    "RKF45": 1.8,
 }
 
 
@@ -71,7 +76,8 @@ class ProjectileGUI(tk.Tk):
 
         self._param_entries: dict[str, tk.Entry] = {}
         self._traj_vars: dict[str, tk.BooleanVar] = {}
-        self._err_vars: dict[str, tk.BooleanVar] = {}
+        self._show_ana_bg = tk.BooleanVar(value=True)
+        # self._err_vars: dict[str, tk.BooleanVar] = {}
 
         self._build_param_frame()
         self._build_notebook()
@@ -80,7 +86,7 @@ class ProjectileGUI(tk.Tk):
         outer = ttk.LabelFrame(self, text="Parametry fizyczne i początkowe", padding=8)
         outer.pack(fill=tk.X, padx=8, pady=6)
 
-        fields = [
+        row1_fields = [
             ("v0", "v₀ [m/s]", "32.0"),
             ("angle", "Kąt α [°]", "51.0"),
             ("m", "m [kg]", "1.0"),
@@ -88,12 +94,14 @@ class ProjectileGUI(tk.Tk):
             ("g", "g [m/s²]", "9.81"),
             ("x0", "x₀ [m]", "0.0"),
             ("y0", "y₀ [m]", "1.0"),
-            ("dt", "Krok dt [s] (Euler/RK4/analityczna siatka)", "0.01"),
+            ("dt", "Krok dt [s] (Euler/RK4)", "0.01"),
+            ("atol", "RKF45 atol", "1e-9"),
+            ("rtol", "RKF45 rtol", "1e-6"),
         ]
-        row = ttk.Frame(outer)
-        row.pack(fill=tk.X)
-        for key, label, default in fields:
-            f = ttk.Frame(row)
+        row1 = ttk.Frame(outer)
+        row1.pack(fill=tk.X)
+        for key, label, default in row1_fields:
+            f = ttk.Frame(row1)
             f.pack(side=tk.LEFT, padx=4, pady=2)
             ttk.Label(f, text=label).pack(anchor=tk.W)
             e = ttk.Entry(f, width=12)
@@ -118,19 +126,37 @@ class ProjectileGUI(tk.Tk):
         ctrl.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
 
         ttk.Label(ctrl, text="Krzywe na wykresie trajektorii y(x):").pack(anchor=tk.W)
-        for _, name in METHOD_ORDER:
+        for _, name in NUM_METHOD_ORDER:
             var = tk.BooleanVar(value=True)
             self._traj_vars[name] = var
             ttk.Checkbutton(ctrl, text=name, variable=var).pack(anchor=tk.W)
 
-        ttk.Separator(ctrl, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
-        ttk.Label(ctrl, text="Błąd vs analityczne (tylko metody numeryczne):").pack(anchor=tk.W)
-        for _, name in METHOD_ORDER:
-            if name == "Analityczne":
-                continue
-            var = tk.BooleanVar(value=True)
-            self._err_vars[name] = var
-            ttk.Checkbutton(ctrl, text=name, variable=var).pack(anchor=tk.W)
+        ttk.Separator(ctrl, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
+        ttk.Checkbutton(
+            ctrl,
+            text="Tło analityczne (szare)",
+            variable=self._show_ana_bg,
+        ).pack(anchor=tk.W)
+
+        ttk.Label(
+            ctrl,
+            text=(
+                "RKF45: zielona linia łączy wyłącznie punkty "
+                "zaakceptowanych kroków przy podanych atol/rtol "
+                "(łamana, nie interpolacja wygładzająca)."
+            ),
+            wraplength=220,
+            justify=tk.LEFT,
+            font=("", 8),
+        ).pack(anchor=tk.W, pady=(8, 0))
+
+        # --- błąd vs analityczne (tymczasowo wyłączony) ---
+        # ttk.Separator(ctrl, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        # ttk.Label(ctrl, text="Błąd vs analityczne (tylko metody numeryczne):").pack(anchor=tk.W)
+        # for _, name in NUM_METHOD_ORDER:
+        #     var = tk.BooleanVar(value=True)
+        #     self._err_vars[name] = var
+        #     ttk.Checkbutton(ctrl, text=name, variable=var).pack(anchor=tk.W)
 
         ttk.Button(ctrl, text="Symuluj / odśwież wykresy", command=self._run_simulation).pack(
             pady=(16, 4), fill=tk.X
@@ -139,9 +165,9 @@ class ProjectileGUI(tk.Tk):
         plot_frame = ttk.Frame(parent)
         plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.fig = Figure(figsize=(7.5, 6.5), dpi=100, layout="tight")
-        self.ax_traj = self.fig.add_subplot(2, 1, 1)
-        self.ax_err = self.fig.add_subplot(2, 1, 2)
+        self.fig = Figure(figsize=(7.5, 5.5), dpi=100, layout="tight")
+        self.ax_traj = self.fig.add_subplot(1, 1, 1)
+        # self.ax_err = self.fig.add_subplot(2, 1, 2)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -157,10 +183,6 @@ class ProjectileGUI(tk.Tk):
         self._bench_n = tk.StringVar(value="1000")
         ttk.Entry(top, textvariable=self._bench_n, width=10).pack(side=tk.LEFT, padx=4)
 
-        ttk.Label(top, text="dt [s]:").pack(side=tk.LEFT, padx=(16, 4))
-        self._bench_dt = tk.StringVar(value="0.01")
-        ttk.Entry(top, textvariable=self._bench_dt, width=8).pack(side=tk.LEFT)
-
         self._bench_btn = ttk.Button(top, text="Uruchom benchmark", command=self._start_benchmark)
         self._bench_btn.pack(side=tk.LEFT, padx=16)
 
@@ -169,7 +191,10 @@ class ProjectileGUI(tk.Tk):
 
         self._bench_text = scrolledtext.ScrolledText(parent, height=28, width=90, font=("Consolas", 10))
         self._bench_text.pack(fill=tk.BOTH, expand=True, pady=8)
-        self._bench_text.insert(tk.END, "Parametry: górny panel (v₀, α, m, k, g, x₀, y₀, dt).\n")
+        self._bench_text.insert(
+            tk.END,
+            "Parametry fizyczne i dt, atol, rtol — z górnego panelu (jak w symulacji).\n",
+        )
         self._bench_text.insert(
             tk.END,
             "Po uruchomieniu pojawi się raport z rozróżnieniem: czas **jednej** pełnej "
@@ -179,62 +204,99 @@ class ProjectileGUI(tk.Tk):
     def _run_simulation(self) -> None:
         try:
             p = _read_params(self._param_entries)
-            dt = float(self._param_entries["dt"].get())
-            if dt <= 0:
-                raise ValueError("dt musi być dodatnie.")
+            dt = parse_positive_float(self._param_entries["dt"].get(), name="dt")
+            atol = parse_positive_float(self._param_entries["atol"].get(), name="atol")
+            rtol = parse_positive_float(self._param_entries["rtol"].get(), name="rtol")
         except ValueError as e:
             messagebox.showerror("Błąd parametrów", str(e))
             return
 
         self.ax_traj.clear()
-        self.ax_err.clear()
+
+        if self._show_ana_bg.get():
+            res_ana = reference_analytical_trajectory(p)
+            self.ax_traj.plot(
+                res_ana.states[:, 0],
+                res_ana.states[:, 1],
+                "-",
+                color="0.55",
+                lw=2.2,
+                alpha=0.45,
+                zorder=0,
+                label="Analityczne",
+            )
 
         cache: dict[Method, TrajectoryResult] = {}
 
         def get_traj(method: Method) -> TrajectoryResult:
             if method not in cache:
-                cache[method] = integrate_until_ground(p, method, dt=dt)
+                if method is Method.RKF45:
+                    cache[method] = integrate_until_ground(
+                        p, method, dt=dt, rkf_atol=atol, rkf_rtol=rtol
+                    )
+                else:
+                    cache[method] = integrate_until_ground(p, method, dt=dt)
             return cache[method]
 
-        for method, name in METHOD_ORDER:
+        for method, name in NUM_METHOD_ORDER:
             if not self._traj_vars[name].get():
                 continue
             res = get_traj(method)
-            ls, lw = TRAJ_STYLES[name]
             self.ax_traj.plot(
                 res.states[:, 0],
                 res.states[:, 1],
-                ls,
-                lw=lw,
+                "-",
+                color=METHOD_COLORS[name],
+                lw=METHOD_LINEWIDTH[name],
+                zorder=1,
                 label=name,
             )
+            if name == "RKF45":
+                self.ax_traj.plot(
+                    res.states[:, 0],
+                    res.states[:, 1],
+                    "o",
+                    color=METHOD_COLORS[name],
+                    ms=4,
+                    zorder=2,
+                    label="_nolegend_",
+                )
 
         self.ax_traj.set_xlabel("x [m]")
         self.ax_traj.set_ylabel("y [m]")
-        self.ax_traj.set_title("Trajektorie y(x) — opór F_d = −k v")
+        title = "Trajektorie"
+        self.ax_traj.set_title(title)
         self.ax_traj.grid(True, alpha=0.35)
         self.ax_traj.legend(loc="best", fontsize=8)
-        self.ax_traj.set_aspect("equal", adjustable="datalim")
+        self.ax_traj.set_xlim(left=0.0)
+        self.ax_traj.set_ylim(bottom=0.0)
+        self.ax_traj.set_aspect("equal", adjustable="box")
 
-        for method, name in METHOD_ORDER:
-            if name == "Analityczne":
-                continue
-            if not self._err_vars[name].get():
-                continue
-            res = get_traj(method)
-            err = pointwise_error_vs_analytical(res.times, res.states, p)
-            if len(err) > 1:
-                t_plot, e_plot = res.times[:-1], err[:-1]
-            else:
-                t_plot, e_plot = res.times, err
-            ls, lw = TRAJ_STYLES[name]
-            self.ax_err.semilogy(t_plot, e_plot + 1e-20, ls, lw=lw * 0.85, label=name)
-
-        self.ax_err.set_xlabel("t [s]")
-        self.ax_err.set_ylabel("‖y_num − y_an‖₂")
-        self.ax_err.set_title("Błąd stanu w punktach siatki (ostatni punkt pominięty)")
-        self.ax_err.grid(True, which="both", alpha=0.35)
-        self.ax_err.legend(loc="best", fontsize=8)
+        # --- wykres błędu stanu (tymczasowo wyłączony) ---
+        # from projectile.simulation import pointwise_error_vs_analytical
+        #
+        # self.ax_err.clear()
+        # for method, name in NUM_METHOD_ORDER:
+        #     if not self._err_vars[name].get():
+        #         continue
+        #     res = get_traj(method)
+        #     err = pointwise_error_vs_analytical(res.times, res.states, p)
+        #     if len(err) > 1:
+        #         t_plot, e_plot = res.times[:-1], err[:-1]
+        #     else:
+        #         t_plot, e_plot = res.times, err
+        #     self.ax_err.semilogy(
+        #         t_plot,
+        #         e_plot + 1e-20,
+        #         "-",
+        #         color=METHOD_COLORS[name],
+        #         lw=METHOD_LINEWIDTH[name] * 0.85,
+        #         label=name,
+        #     )
+        # self.ax_err.set_xlabel("t [s]")
+        # self.ax_err.set_ylabel("‖y_num − y_an‖₂")
+        # self.ax_err.set_title("Błąd stanu w punktach siatki (ostatni punkt pominięty)")
+        # self.ax_err.grid(True, which="both", alpha=0.35)
 
         self.fig.tight_layout()
         self.canvas.draw()
@@ -243,11 +305,11 @@ class ProjectileGUI(tk.Tk):
         try:
             p = _read_params(self._param_entries)
             n = int(self._bench_n.get())
-            dt = float(self._bench_dt.get())
+            dt = parse_positive_float(self._param_entries["dt"].get(), name="dt")
+            atol = parse_positive_float(self._param_entries["atol"].get(), name="atol")
+            rtol = parse_positive_float(self._param_entries["rtol"].get(), name="rtol")
             if n < 1:
                 raise ValueError("N ≥ 1")
-            if dt <= 0:
-                raise ValueError("dt > 0")
         except ValueError as e:
             messagebox.showerror("Błąd", str(e))
             return
@@ -256,16 +318,26 @@ class ProjectileGUI(tk.Tk):
         self._bench_status.configure(text="Trwa benchmark…")
 
         def worker() -> None:
-            stats = run_benchmark_detailed(n_runs=n, dt=dt, p=p)
-            self.after(0, lambda: self._benchmark_done(stats))
+            stats = run_benchmark_detailed(
+                n_runs=n, dt=dt, p=p, rkf_atol=atol, rkf_rtol=rtol
+            )
+            self.after(0, lambda: self._benchmark_done(stats, dt, atol, rtol))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _benchmark_done(self, stats: dict[str, MethodBenchStats]) -> None:
+    def _benchmark_done(
+        self,
+        stats: dict[str, MethodBenchStats],
+        dt: float,
+        atol: float,
+        rtol: float,
+    ) -> None:
         self._bench_btn.configure(state=tk.NORMAL)
         self._bench_status.configure(text="Gotowe.")
 
-        block = format_benchmark_report(stats)
+        block = format_benchmark_report(
+            stats, dt=dt, rkf_atol=atol, rkf_rtol=rtol
+        )
         self._bench_text.insert(tk.END, block + "\n\n")
         self._bench_text.see(tk.END)
 

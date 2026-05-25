@@ -15,6 +15,15 @@ Stan: \(\mathbf{y} = [x,\, y,\, v_x,\, v_y]^T\).
 
 Szczegóły implementacji: `projectile/model.py`, rozwiązanie zamknięte: `projectile/analytical.py`.
 
+Rozwiązanie analityczne (przy \(k > 0\), \(v_x(0) = v_0\cos\theta\), \(v_y(0) = v_0\sin\theta\)):
+
+\[
+x(t) = \frac{m}{k}\, v_0\cos\theta \left(1 - e^{-kt/m}\right), \quad
+y(t) = \frac{m}{k}\left(v_0\sin\theta + \frac{mg}{k}\right)\left(1 - e^{-kt/m}\right) - \frac{mg}{k}\, t
+\]
+
+(w kodzie uwzględniane są też przesunięcia początkowe \(x_0\), \(y_0\)).
+
 ## Metody numeryczne
 
 | Metoda | Plik |

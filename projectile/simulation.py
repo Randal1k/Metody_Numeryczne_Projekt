@@ -156,6 +156,25 @@ def _analytical_trajectory_on_grid(
     return TrajectoryResult(times=t_grid, states=states, local_error_estimates=None)
 
 
+def reference_analytical_trajectory(
+    p: ProjectileParams,
+    *,
+    n_points: int = 1000,
+    t_max: float = 200.0,
+) -> TrajectoryResult:
+    """
+    Dokładna trajektoria analityczna na gęstej siatce czasu (niezależnej od dt symulacji).
+
+    Używana jako tło odniesienia na wykresach y(x).
+    """
+    t_hit = _find_ground_time_analytical(p, t_max=t_max)
+    if t_hit is None:
+        t_hit = t_max
+    t_grid = np.linspace(0.0, t_hit, max(2, n_points))
+    states = analytical_state(t_grid, p)
+    return TrajectoryResult(times=t_grid, states=states, local_error_estimates=None)
+
+
 def _find_ground_time_analytical(p: ProjectileParams, t_max: float) -> float | None:
     """Pierwsze t >= 0, że y(t) <= 0 po locie (dla startu na y=0 z v_y>0 pomijamy t=0)."""
 

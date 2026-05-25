@@ -22,6 +22,18 @@ def main() -> None:
     parser.add_argument("--plots-only", action="store_true")
     parser.add_argument("--bench-only", action="store_true")
     parser.add_argument("--dt", type=float, default=0.01, help="Krok dla Eulera/RK4")
+    parser.add_argument(
+        "--atol",
+        type=float,
+        default=1e-9,
+        help="RKF45: tolerancja bezwzględna (dowolna dodatnia, np. 1e-3, 0.01)",
+    )
+    parser.add_argument(
+        "--rtol",
+        type=float,
+        default=1e-6,
+        help="RKF45: tolerancja względna (dowolna dodatnia, np. 1e-2, 1)",
+    )
     parser.add_argument("--gui", action="store_true", help="Uruchom aplikację okienkową")
     args = parser.parse_args()
 
@@ -34,11 +46,25 @@ def main() -> None:
     p = ProjectileParams()
 
     if not args.bench_only:
-        run_plots(p, dt=args.dt, show=True)
+        run_plots(
+            p,
+            dt=args.dt,
+            rkf_atol=args.atol,
+            rkf_rtol=args.rtol,
+            show=True,
+        )
 
     if not args.plots_only:
         print()
-        detailed = run_benchmark_detailed(p=p, dt=args.dt)
+        detailed = run_benchmark_detailed(
+            p=p, dt=args.dt, rkf_atol=args.atol, rkf_rtol=args.rtol
+        )
+        from projectile.tolerances import format_tolerance
+
+        print(
+            f"RKF45: atol = {format_tolerance(args.atol)}, "
+            f"rtol = {format_tolerance(args.rtol)}"
+        )
         print(format_benchmark_report(detailed))
 
 
